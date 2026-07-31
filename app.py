@@ -92,7 +92,39 @@ def inject_css():
     @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
     html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
     .stApp {{ background: {T['bg']}; }}
-    #MainMenu, footer, header {{ visibility: hidden; }}
+    #MainMenu {{ visibility: hidden; }}
+    footer {{ visibility: hidden; }}
+    /* mantener el header presente (ahí vive la flecha para reabrir el sidebar
+       colapsado) pero transparente y sin la barra de herramientas de Streamlit */
+    header[data-testid="stHeader"] {{ background: transparent !important; box-shadow: none !important; }}
+    [data-testid="stToolbar"] {{ visibility: hidden; }}
+    [data-testid="collapsedControl"] {{ visibility: visible !important; color: {T['text']} !important; }}
+    [data-testid="collapsedControl"] svg {{ fill: {T['text']} !important; }}
+
+    /* sidebar como columna flex real: así el botón de Configuración se pega
+       abajo en cualquier tamaño de pantalla, sin trucos de altura fija */
+    [data-testid="stSidebarUserContent"] {{
+        display: flex; flex-direction: column; min-height: 92vh;
+    }}
+    .sidebar-spacer {{ flex: 1 1 auto; }}
+
+    /* ---------- RESPONSIVE: tablet (iPad) y móvil ---------- */
+    @media (max-width: 1024px) {{
+        .block-container {{ padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
+    }}
+    @media (max-width: 768px) {{
+        .app-title {{ font-size: 26px !important; }}
+        .app-sub {{ font-size: 13.5px !important; }}
+        .stat-card {{ padding: 14px 16px; }}
+        .stat-value {{ font-size: 20px !important; }}
+        .stat-label {{ font-size: 10.5px !important; }}
+        .empty-card {{ padding: 28px 18px; font-size: 14px; }}
+        .block-container {{ padding-top: 1rem; }}
+    }}
+    @media (max-width: 480px) {{
+        .app-title {{ font-size: 22px !important; }}
+        .pill {{ font-size: 10.5px; padding: 3px 9px; margin-bottom: 4px; }}
+    }}
     .block-container {{ padding-top: 1.5rem; max-width: 1180px; }}
     h1, h2, h3 {{ font-family: 'Space Grotesk', sans-serif; color: {T['text']}; }}
     p, span, div, label {{ color: {T['text']}; }}
@@ -211,7 +243,7 @@ with st.sidebar:
     if menu_choice in L["nav"]:
         st.session_state.page = PAGES[L["nav"].index(menu_choice)]
 
-    st.markdown('<div style="height:38vh;"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-spacer"></div>', unsafe_allow_html=True)
     st.markdown("---")
     if st.button(f"⚙️  {L['settings']}", use_container_width=True):
         st.session_state.page = "Configuración"
@@ -330,7 +362,7 @@ def render_backtester():
         fig.update_layout(shapes=shapes)
 
     fig.update_layout(
-        height=560, margin=dict(l=10, r=10, t=10, b=10),
+        height=460, margin=dict(l=10, r=10, t=10, b=10),
         plot_bgcolor=T["chart_bg"], paper_bgcolor=T["chart_bg"],
         font=dict(family="Inter", color=T["chart_font"]),
         xaxis=dict(showgrid=False, rangeslider=dict(visible=True, thickness=0.06), type="date"),
