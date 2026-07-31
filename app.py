@@ -255,4 +255,3 @@ with tab_explorar:
             with st.spinner("Corriendo backtest completo..."):
                 trades, equity, final_balance = run_backtest(df, cfg)
             show_results(trades, equity, cfg.initial_balance)
-            
