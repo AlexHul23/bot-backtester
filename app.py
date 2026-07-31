@@ -356,10 +356,25 @@ with st.expander("🎞 Reproductor de velas — comprobar detección SMC vela po
 
     smc_df = _cached_smc_build(df, dataset_label)
 
-    window_size = st.slider("Velas visibles en el gráfico", 40, 300, 120, step=20)
     max_idx = len(smc_df) - 1
+    min_window = min(40, max(5, max_idx))  # nunca pedir más velas de las que hay
+    window_size = st.slider(
+        "Velas visibles en el gráfico", min_window, max(min_window, 300),
+        min(120, max(min_window, max_idx)), step=20,
+        key=f"replay_window_{dataset_label}_{len(smc_df)}",
+    )
+
+    if max_idx < min_window:
+        st.warning(f"Este dataset solo tiene {len(smc_df)} velas — muy pocas para el reproductor.")
+        st.stop()
+
+    window_size = min(window_size, max_idx)  # nunca pedir más velas de las disponibles
     default_start = max(window_size, min(max_idx, window_size * 3))
-    current_idx = st.slider("Posición (vela actual)", window_size, max_idx, default_start)
+    current_idx = st.slider(
+        "Posición (vela actual)", window_size, max_idx, min(default_start, max_idx),
+        key=f"replay_pos_{dataset_label}_{len(smc_df)}",
+    )
+    current_idx = min(current_idx, max_idx)  # salvaguarda extra
 
     view = smc_df.iloc[max(0, current_idx - window_size):current_idx + 1]
 
