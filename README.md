@@ -4,15 +4,44 @@ Backtester web tipo StrategyQuant pero gratis, sin descargas, con data integrada
 y un modo de exploración automática de estrategias.
 
 ## Qué incluye esta versión
-- **Data integrada**: los históricos viven en `data/*.parquet` dentro del repo.
-  El usuario ya no necesita subir un CSV cada vez.
-- **Modo manual**: eliges regla y parámetros tú mismo (cruce EMA, RSI reversion,
-  breakout Donchian), con una explicación corta de cuándo funciona cada una.
-- **Modo "no sé qué usar"**: grid search automático — prueba decenas de
-  combinaciones de parámetros y las rankea por Profit Factor, Sharpe y
-  Drawdown. Punto de partida basado en datos, no en intuición.
+- **Data integrada** vía Hugging Face (o local/upload como respaldo).
+- **Modo simple**: un botón, sin jerga — prueba automáticamente 4 familias de
+  reglas (tendencia, rebotes, breakout, y ahora **Smart Money Concepts**) y
+  rankea las mejores configuraciones.
+- **Motor Smart Money Concepts** (`smc.py`): estructura (swings, BOS, CHoCH),
+  liquidez (equal highs/lows, liquidity sweep), order blocks, Fair Value Gaps,
+  zonas premium/discount/equilibrium, kill zones (Londres/NY), y velas de
+  confirmación (engulfing, pin bar, momentum, expansión de volatilidad).
+  **Diseñado sin look-ahead bias**: cada evento solo se vuelve "visible" en el
+  motor en el mismo momento en que un trader real lo confirmaría, no antes.
+- **Reproductor de velas**: gráfico de velas navegable vela por vela con las
+  señales SMC superpuestas, para comprobar visualmente que la detección es
+  correcta y no hace trampa mirando al futuro.
+- **Modo experto**: parámetros manuales, incluida la regla SMC con todos sus
+  toggles de confluencia (zona, OB/FVG, confirmación, kill zone, CHoCH-only).
 - SL/TP dinámico basado en ATR, position sizing por % de riesgo.
-- Exportar trades a CSV.
+
+## El motor SMC — qué cubre y qué falta
+Implementado: Break of Structure, Change of Character (MSS tratado como
+sinónimo de CHoCH), tendencia/rango, equal highs/lows, liquidity sweep,
+order blocks, Fair Value Gap, premium/discount/equilibrium, kill zones de
+Londres y Nueva York, vela envolvente, pin bar, momentum, expansión de
+volatilidad.
+
+Pendiente para una v2 (quedaron fuera porque su definición operativa es más
+ambigua y merecen su propio diseño con cuidado): breaker block, mitigation
+block, rejection block, distinción liquidez interna vs externa, inverse FVG,
+volume imbalance.
+
+## El pipeline completo — dónde estamos
+```
+Datos históricos → Generador de reglas → Backtest → Filtros de calidad
+    → Optimización → Walk Forward → Monte Carlo → Guardar estrategia
+```
+✅ Datos históricos · ✅ Generador de reglas (4 familias incl. SMC) · ✅ Backtest
+· ✅ Optimización (grid search) · ⬜ Filtros de calidad automáticos (hoy el
+grid search descarta configs con <10 trades, pero no aplica umbrales de PF/DD
+como filtro duro) · ⬜ Walk Forward · ⬜ Monte Carlo · ⬜ Guardar estrategia
 
 ## Estructura de archivos
 ```

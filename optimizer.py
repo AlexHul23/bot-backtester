@@ -31,6 +31,12 @@ PARAM_GRIDS = {
     "donchian_breakout": {
         "donchian_period": [10, 20, 55],
     },
+    "smc_confluence": {
+        "smc_require_choch": [False, True],
+        "smc_require_ob_or_fvg": [True, False],
+        "smc_require_confirmation": [True, False],
+        "smc_require_killzone": [False, True],
+    },
 }
 
 RISK_GRID = {

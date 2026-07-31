@@ -34,7 +34,7 @@ class Trade:
 
 @dataclass
 class StrategyConfig:
-    entry_rule: str          # "ema_cross", "rsi_reversion", "donchian_breakout"
+    entry_rule: str          # "ema_cross", "rsi_reversion", "donchian_breakout", "smc_confluence"
     fast_period: int = 12
     slow_period: int = 26
     rsi_period: int = 14
@@ -48,6 +48,15 @@ class StrategyConfig:
     allow_shorts: bool = True
     initial_balance: float = 10000.0
     point_value: float = 1.0          # valor monetario de 1.0 de precio por 1 unidad de tamaño (ajusta según instrumento)
+
+    # --- Smart Money Concepts (usados solo si entry_rule == "smc_confluence") ---
+    smc_swing_left: int = 2
+    smc_swing_right: int = 2
+    smc_require_choch: bool = False     # True = solo entra en cambios de carácter (reversión); False = BOS o CHoCH
+    smc_require_zone: bool = True       # exige que el precio esté en discount (long) / premium (short)
+    smc_require_ob_or_fvg: bool = True  # exige mitigación de Order Block o Fair Value Gap
+    smc_require_confirmation: bool = True  # exige vela de confirmación (engulfing o pin bar)
+    smc_require_killzone: bool = False  # exige sesión de Londres o Nueva York
 
 
 def build_signals(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
@@ -73,6 +82,56 @@ def build_signals(df: pd.DataFrame, cfg: StrategyConfig) -> pd.DataFrame:
         df["dc_low"] = ind.donchian_low(df, cfg.donchian_period).shift(1)
         df["long_signal"] = df["Close"] > df["dc_high"]
         df["short_signal"] = df["Close"] < df["dc_low"]
+
+    elif cfg.entry_rule == "smc_confluence":
+        import smc
+        s = smc.build_smc_dataframe(
+            df, swing_left=cfg.smc_swing_left, swing_right=cfg.smc_swing_right,
+            atr_period=cfg.atr_period,
+        )
+        for col in s.columns:
+            if col not in df.columns:
+                df[col] = s[col]
+
+        # SESGO direccional: la entrada ocurre en el RETROCESO posterior al
+        # BOS/CHoCH, no en la misma vela del rompimiento (un BOS alcista rompe
+        # hacia arriba, así que esa vela ya está en premium, no discount).
+        # Por eso el sesgo usa la tendencia vigente (que persiste hasta que
+        # se invalida), y el gatillo real de entrada es la zona + OB/FVG + confirmación.
+        if cfg.smc_require_choch:
+            # sesgo solo vigente unas velas después de un CHoCH (reversión reciente)
+            long_bias = df["choch_bull"].replace(False, np.nan).ffill(limit=15).fillna(False).astype(bool)
+            short_bias = df["choch_bear"].replace(False, np.nan).ffill(limit=15).fillna(False).astype(bool)
+        else:
+            long_bias = (df["trend"] == "up")
+            short_bias = (df["trend"] == "down")
+
+        # mitigación de order block o FVG: el precio de la vela toca la zona
+        bull_ob_touch = (df["Low"] <= df["bull_ob_high"]) & (df["Close"] >= df["bull_ob_low"])
+        bear_ob_touch = (df["High"] >= df["bear_ob_low"]) & (df["Close"] <= df["bear_ob_high"])
+        bull_fvg_touch = (df["Low"] <= df["bull_fvg_top"]) & (df["Close"] >= df["bull_fvg_bottom"])
+        bear_fvg_touch = (df["High"] >= df["bear_fvg_bottom"]) & (df["Close"] <= df["bear_fvg_top"])
+        zone_ob_fvg_long = bull_ob_touch.fillna(False) | bull_fvg_touch.fillna(False)
+        zone_ob_fvg_short = bear_ob_touch.fillna(False) | bear_fvg_touch.fillna(False)
+
+        long_cond = long_bias.copy()
+        short_cond = short_bias.copy()
+
+        if cfg.smc_require_zone:
+            long_cond &= (df["zone"] == "discount")
+            short_cond &= (df["zone"] == "premium")
+        if cfg.smc_require_ob_or_fvg:
+            long_cond &= zone_ob_fvg_long
+            short_cond &= zone_ob_fvg_short
+        if cfg.smc_require_confirmation:
+            long_cond &= (df["bullish_engulfing"] | df["bullish_pinbar"])
+            short_cond &= (df["bearish_engulfing"] | df["bearish_pinbar"])
+        if cfg.smc_require_killzone:
+            long_cond &= df["kill_zone"]
+            short_cond &= df["kill_zone"]
+
+        df["long_signal"] = long_cond
+        df["short_signal"] = short_cond
 
     else:
         raise ValueError(f"Regla de entrada desconocida: {cfg.entry_rule}")

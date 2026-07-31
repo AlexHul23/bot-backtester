@@ -25,11 +25,13 @@ RULE_LABELS = {
     "ema_cross": "Sigue la tendencia",
     "rsi_reversion": "Aprovecha rebotes",
     "donchian_breakout": "Rompe máximos y mínimos",
+    "smc_confluence": "Smart Money (estructura + liquidez)",
 }
 RULE_DESCRIPTIONS = {
     "ema_cross": "Entra cuando el precio arranca un movimiento claro en una dirección, y se queda montado mientras dura.",
     "rsi_reversion": "Entra cuando el precio se movió demasiado rápido y es probable que rebote en la dirección contraria.",
     "donchian_breakout": "Entra cuando el precio rompe un máximo o mínimo reciente, apostando a que sigue rompiendo.",
+    "smc_confluence": "Entra en el retroceso posterior a un rompimiento de estructura: precio en zona barata (discount), tocando una zona de order block o Fair Value Gap, confirmado con una vela de rechazo.",
 }
 
 
@@ -335,6 +337,92 @@ st.write("")
 st.write("")
 
 # ============================================================
+# REPRODUCTOR DE VELAS — para comprobar visualmente que las señales SMC
+# se detectan en el momento correcto, sin look-ahead.
+# ============================================================
+with st.expander("🎞 Reproductor de velas — comprobar detección SMC vela por vela"):
+    st.caption(
+        "Avanza vela por vela y revisa que los eventos (BOS, CHoCH, Order Blocks, FVG) "
+        "aparecen cuando deberían — no antes. Si ves una señal marcada en una vela y el "
+        "patrón que la originó todavía no se ve completo en el gráfico, hay un problema "
+        "de look-ahead que hay que corregir antes de confiar en el backtest."
+    )
+
+    import smc as smc_module
+
+    @st.cache_data(show_spinner=False)
+    def _cached_smc_build(_df, df_key):
+        return smc_module.build_smc_dataframe(_df)
+
+    smc_df = _cached_smc_build(df, dataset_label)
+
+    window_size = st.slider("Velas visibles en el gráfico", 40, 300, 120, step=20)
+    max_idx = len(smc_df) - 1
+    default_start = max(window_size, min(max_idx, window_size * 3))
+    current_idx = st.slider("Posición (vela actual)", window_size, max_idx, default_start)
+
+    view = smc_df.iloc[max(0, current_idx - window_size):current_idx + 1]
+
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"],
+        increasing_line_color="#2F9E52", decreasing_line_color="#E1523D", name="Precio",
+    ))
+
+    def _markers(mask_col, y_col, symbol, color, label):
+        sub = view[view[mask_col] == True]
+        if sub.empty:
+            return
+        fig.add_trace(go.Scatter(
+            x=sub.index, y=sub[y_col], mode="markers", name=label,
+            marker=dict(symbol=symbol, size=11, color=color, line=dict(width=1, color="#14151A")),
+        ))
+
+    _markers("bos_bull", "Low", "triangle-up", "#2F9E52", "BOS alcista")
+    _markers("bos_bear", "High", "triangle-down", "#E1523D", "BOS bajista")
+    _markers("choch_bull", "Low", "star", "#D6FF3F", "CHoCH alcista")
+    _markers("choch_bear", "High", "star", "#F97316", "CHoCH bajista")
+    _markers("liquidity_sweep_high", "High", "x", "#9333EA", "Liquidity sweep (alto)")
+    _markers("liquidity_sweep_low", "Low", "x", "#9333EA", "Liquidity sweep (bajo)")
+
+    # zonas activas de OB y FVG dentro de la ventana visible, como rectángulos sombreados
+    shapes = []
+    last_bull_ob = view[["bull_ob_high", "bull_ob_low"]].dropna()
+    if not last_bull_ob.empty:
+        r = last_bull_ob.iloc[-1]
+        shapes.append(dict(type="rect", x0=view.index[0], x1=view.index[-1],
+                            y0=r["bull_ob_low"], y1=r["bull_ob_high"],
+                            fillcolor="rgba(47,158,82,0.12)", line=dict(width=0), layer="below"))
+    last_bear_ob = view[["bear_ob_high", "bear_ob_low"]].dropna()
+    if not last_bear_ob.empty:
+        r = last_bear_ob.iloc[-1]
+        shapes.append(dict(type="rect", x0=view.index[0], x1=view.index[-1],
+                            y0=r["bear_ob_low"], y1=r["bear_ob_high"],
+                            fillcolor="rgba(225,82,61,0.12)", line=dict(width=0), layer="below"))
+    fig.update_layout(shapes=shapes)
+
+    fig.update_layout(
+        height=480, margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter", color="#6B7280"),
+        xaxis=dict(showgrid=False, rangeslider=dict(visible=False)),
+        yaxis=dict(showgrid=True, gridcolor="rgba(20,21,26,0.06)"),
+        legend=dict(orientation="h", y=1.08),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    current_row = smc_df.iloc[current_idx]
+    st.markdown(
+        f'<span class="pill">Tendencia: {current_row["trend"] or "sin definir"}</span>'
+        f'<span class="pill">Zona: {current_row["zone"] or "sin definir"}</span>'
+        f'<span class="pill">{"🟢 Kill zone activa" if current_row["kill_zone"] else "Kill zone inactiva"}</span>',
+        unsafe_allow_html=True,
+    )
+
+st.write("")
+st.write("")
+
+# ============================================================
 # MODO EXPERTO — parámetros manuales, colapsado al fondo
 # ============================================================
 with st.expander("🧪 Modo experto — elegir yo mismo los parámetros"):
@@ -357,6 +445,15 @@ with st.expander("🧪 Modo experto — elegir yo mismo los parámetros"):
         params["rsi_overbought"] = pc3.number_input("RSI sobrecompra", 50, 99, 70)
     elif entry_rule == "donchian_breakout":
         params["donchian_period"] = pc1.number_input("Periodo Donchian", 2, 200, 20)
+    elif entry_rule == "smc_confluence":
+        params["smc_swing_left"] = pc1.number_input("Velas para confirmar swing (izq.)", 1, 10, 2)
+        params["smc_swing_right"] = pc2.number_input("Velas para confirmar swing (der.)", 1, 10, 2)
+        params["smc_require_choch"] = pc3.checkbox("Solo entrar tras CHoCH (reversión)", value=False)
+        sc1, sc2, sc3 = st.columns(3)
+        params["smc_require_zone"] = sc1.checkbox("Exigir zona discount/premium", value=True)
+        params["smc_require_ob_or_fvg"] = sc2.checkbox("Exigir Order Block o FVG", value=True)
+        params["smc_require_confirmation"] = sc3.checkbox("Exigir vela de confirmación", value=True)
+        params["smc_require_killzone"] = st.checkbox("Exigir sesión de Londres/Nueva York", value=False)
 
     rc1, rc2 = st.columns(2)
     sl_atr_mult = rc1.number_input("SL (múltiplo de ATR)", 0.1, 20.0, 1.5, step=0.1, key="manual_sl")
