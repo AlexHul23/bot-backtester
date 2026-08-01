@@ -106,6 +106,16 @@ def inject_css():
     }}
     .sidebar-spacer {{ flex: 1 1 auto; }}
 
+    /* respaldo: fuerza fondo transparente en los items del menú de navegación
+       (streamlit-option-menu a veces conserva un fondo blanco por defecto) */
+    section[data-testid="stSidebar"] ul.nav {{ background-color: transparent !important; }}
+    section[data-testid="stSidebar"] .nav-link {{
+        background-color: transparent !important; color: {T['sidebar_text']} !important;
+    }}
+    section[data-testid="stSidebar"] .nav-link.active {{
+        background-color: {ACCENT} !important; color: #14151A !important;
+    }}
+
     /* ---------- RESPONSIVE: tablet (iPad) y móvil ---------- */
     @media (max-width: 1024px) {{
         .block-container {{ padding-left: 1rem; padding-right: 1rem; max-width: 100%; }}
@@ -207,10 +217,11 @@ with st.sidebar:
             "icon": {"color": ACCENT, "font-size": "16px"},
             "nav-link": {
                 "font-family": "Inter", "font-size": "14.5px", "font-weight": "600",
-                "color": T["sidebar_text"], "border-radius": "10px", "margin": "3px 0",
-                "padding": "10px 14px",
+                "color": T["sidebar_text"], "background-color": "transparent",
+                "border-radius": "10px", "margin": "3px 0", "padding": "10px 14px",
             },
             "nav-link-selected": {"background-color": ACCENT, "color": "#14151A"},
+            "menu": {"background-color": "transparent"},
         },
     )
     if menu_choice in L["nav"]:
