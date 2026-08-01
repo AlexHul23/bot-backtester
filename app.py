@@ -12,10 +12,8 @@ import plotly.graph_objects as go
 from streamlit_option_menu import option_menu
 
 from data_loader import (
-    load_dukascopy_csv, list_local_datasets, load_local_dataset,
-    list_hf_datasets, load_hf_dataset,
+    list_hf_datasets, load_hf_dataset, parse_instrument_name, resample_ohlc,
 )
-import smc as smc_module
 
 st.set_page_config(page_title="Bot Backtester", layout="wide", initial_sidebar_state="expanded")
 
@@ -179,39 +177,14 @@ def _cached_hf_load(repo_id: str, filename: str):
     return load_hf_dataset(repo_id, filename)
 
 
-def data_source_picker():
-    """Selector de datos compacto. Devuelve (df, label) o (None, None)."""
-    df, label = None, None
+def get_instrument_options():
+    """Lista instrumentos disponibles en Hugging Face con nombre limpio (ej. XAUUSD)."""
     with st.spinner("Cargando instrumentos disponibles..."):
         hf_files = _cached_hf_list(HF_REPO_ID)
-
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        if hf_files:
-            key = st.selectbox("Instrumento", hf_files, key="bt_instrument")
-            with st.spinner("Descargando (se cachea)..."):
-                df = _cached_hf_load(HF_REPO_ID, key)
-            label = key
-        else:
-            st.warning(f"No hay datos en Hugging Face (`{HF_REPO_ID}`). Usa la fuente alterna →")
-    with col2:
-        with st.expander("Otra fuente"):
-            mode = st.radio("Fuente", ["Data local", "Subir CSV"], key="bt_alt_mode", label_visibility="collapsed")
-            if mode == "Data local":
-                local = list_local_datasets()
-                if local:
-                    k = st.selectbox("Instrumento local", list(local.keys()), key="bt_local_key")
-                    df = load_local_dataset(local[k])
-                    label = k
-            else:
-                up = st.file_uploader("CSV de Dukascopy", type=["csv"], key="bt_upload")
-                if up is not None:
-                    try:
-                        df = load_dukascopy_csv(up)
-                        label = up.name
-                    except Exception as e:
-                        st.error(f"No pude leer el CSV: {e}")
-    return df, label
+    mapping = {}
+    for f in hf_files:
+        mapping[parse_instrument_name(f)] = f
+    return mapping
 
 
 # ============================================================
@@ -291,29 +264,55 @@ def render_backtester():
     st.markdown(f'<div class="app-title">{L["backtester_title"]}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="app-sub">{L["backtester_sub"]}</div>', unsafe_allow_html=True)
 
-    df, label = data_source_picker()
-    if df is None:
+    instrument_map = get_instrument_options()
+    if not instrument_map:
+        st.warning(f"No hay datos en Hugging Face (`{HF_REPO_ID}`) todavía.")
         return
 
-    st.markdown(f'<span class="pill accent">{label}</span>'
-                f'<span class="pill">{len(df):,} velas</span>'
-                f'<span class="pill">{df.index.min().date()} → {df.index.max().date()}</span>',
+    st.markdown('<div class="stat-card">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        instrument = st.selectbox("Instrumento", sorted(instrument_map.keys()))
+    filename = instrument_map[instrument]
+
+    with st.spinner("Descargando datos (se cachea)..."):
+        raw_df = _cached_hf_load(HF_REPO_ID, filename)
+
+    with c2:
+        timeframe = st.selectbox("Tiempo", ["M1", "M5", "M15", "M30", "H1", "H4", "D1"], index=4)
+
+    min_date = raw_df.index.min().date()
+    max_date = raw_df.index.max().date()
+    with c3:
+        default_start = max(min_date, max_date - pd.Timedelta(days=180))
+        date_range = st.date_input(
+            "Fecha", value=(default_start, max_date),
+            min_value=min_date, max_value=max_date,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if isinstance(date_range, (tuple, list)) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        st.info("Selecciona el rango de fechas completo (inicio y fin) para ver el gráfico.")
+        return
+
+    mask = (raw_df.index.date >= start_date) & (raw_df.index.date <= end_date)
+    filtered = raw_df.loc[mask]
+    if filtered.empty:
+        st.warning("No hay velas en ese rango de fechas.")
+        return
+
+    view_df = resample_ohlc(filtered, timeframe) if timeframe != "M1" else filtered
+    if view_df.empty:
+        st.warning("El rango elegido no produjo velas al agrupar en esta temporalidad. Prueba un rango más amplio.")
+        return
+
+    st.markdown(f'<span class="pill accent">{instrument}</span>'
+                f'<span class="pill">{timeframe}</span>'
+                f'<span class="pill">{len(view_df):,} velas</span>'
+                f'<span class="pill">{start_date} → {end_date}</span>',
                 unsafe_allow_html=True)
-
-    with st.expander("Mostrar conceptos Smart Money sobre el gráfico"):
-        show_bos = st.checkbox("BOS / CHoCH", value=False)
-        show_ob = st.checkbox("Order Blocks", value=False)
-        show_fvg = st.checkbox("Fair Value Gaps", value=False)
-        show_sweep = st.checkbox("Liquidity sweeps", value=False)
-
-    n_visible = st.select_slider("Velas iniciales visibles", options=[100, 200, 300, 500, 1000], value=300)
-    view_df = df.tail(max(n_visible, 300))  # margen extra para poder hacer scroll hacia atrás con el rangeslider
-
-    need_smc = show_bos or show_ob or show_fvg or show_sweep
-    smc_df = None
-    if need_smc:
-        with st.spinner("Calculando conceptos SMC..."):
-            smc_df = smc_module.build_smc_dataframe(df).tail(max(n_visible, 300))
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
@@ -324,42 +323,7 @@ def render_backtester():
         name="Precio",
     ))
 
-    if need_smc and smc_df is not None:
-        def markers(mask_col, y_col, symbol, color, name):
-            sub = smc_df[smc_df[mask_col] == True]
-            if sub.empty:
-                return
-            fig.add_trace(go.Scatter(x=sub.index, y=sub[y_col], mode="markers", name=name,
-                                      marker=dict(symbol=symbol, size=10, color=color,
-                                                  line=dict(width=1, color=T["chart_bg"]))))
-        if show_bos:
-            markers("bos_bull", "Low", "triangle-up", GREEN, "BOS alcista")
-            markers("bos_bear", "High", "triangle-down", RED, "BOS bajista")
-            markers("choch_bull", "Low", "star", ACCENT, "CHoCH alcista")
-            markers("choch_bear", "High", "star", "#F97316", "CHoCH bajista")
-        if show_sweep:
-            markers("liquidity_sweep_high", "High", "x", "#9333EA", "Sweep alto")
-            markers("liquidity_sweep_low", "Low", "x", "#9333EA", "Sweep bajo")
 
-        shapes = []
-        if show_ob:
-            for col_h, col_l, color in [("bull_ob_high", "bull_ob_low", GREEN), ("bear_ob_high", "bear_ob_low", RED)]:
-                z = smc_df[[col_h, col_l]].dropna()
-                if not z.empty:
-                    r = z.iloc[-1]
-                    shapes.append(dict(type="rect", x0=view_df.index[0], x1=view_df.index[-1],
-                                        y0=r[col_l], y1=r[col_h],
-                                        fillcolor=f"rgba({'62,207,142' if color==GREEN else '248,113,113'},0.12)",
-                                        line=dict(width=0), layer="below"))
-        if show_fvg:
-            for col_top, col_bot, color in [("bull_fvg_top", "bull_fvg_bottom", GREEN), ("bear_fvg_top", "bear_fvg_bottom", RED)]:
-                z = smc_df[smc_df[col_top].notna()]
-                for _, r in z.tail(5).iterrows():
-                    shapes.append(dict(type="rect", x0=r.name, x1=view_df.index[-1],
-                                        y0=r[col_bot], y1=r[col_top],
-                                        fillcolor=f"rgba({'62,207,142' if color==GREEN else '248,113,113'},0.10)",
-                                        line=dict(width=0), layer="below"))
-        fig.update_layout(shapes=shapes)
 
     fig.update_layout(
         height=460, margin=dict(l=10, r=10, t=10, b=10),
